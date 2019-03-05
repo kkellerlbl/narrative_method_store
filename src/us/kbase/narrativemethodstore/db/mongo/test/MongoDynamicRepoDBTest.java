@@ -1,7 +1,5 @@
 package us.kbase.narrativemethodstore.db.mongo.test;
 
-import static us.kbase.narrativemethodstore.db.mongo.MongoUtils.toMap;
-
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
@@ -11,11 +9,14 @@ import java.io.OutputStream;
 import java.net.URL;
 import java.nio.charset.Charset;
 import java.util.Arrays;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 
 import junit.framework.Assert;
 
+import org.jongo.Jongo;
+import org.jongo.MongoCollection;
 import org.junit.After;
 import org.junit.AfterClass;
 import org.junit.Before;
@@ -25,12 +26,10 @@ import org.junit.Test;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.mongodb.DB;
-import com.mongodb.DBCollection;
-import com.mongodb.DBCursor;
-import com.mongodb.DBObject;
-import com.mongodb.MongoClient;
 
+import us.kbase.auth.AuthService;
 import us.kbase.auth.AuthToken;
+import us.kbase.common.mongo.GetMongoDB;
 import us.kbase.common.service.UObject;
 import us.kbase.narrativemethodstore.MethodBriefInfo;
 import us.kbase.narrativemethodstore.MethodParameter;
@@ -42,6 +41,7 @@ import us.kbase.narrativemethodstore.db.JsonRepoProvider;
 import us.kbase.narrativemethodstore.db.NarrativeMethodData;
 import us.kbase.narrativemethodstore.db.RepoProvider;
 import us.kbase.narrativemethodstore.db.DynamicRepoDB.RepoState;
+import us.kbase.narrativemethodstore.db.docker.DockerImageBuilder;
 import us.kbase.narrativemethodstore.db.github.FileRepoProvider;
 import us.kbase.narrativemethodstore.db.github.GitHubRepoProvider;
 import us.kbase.narrativemethodstore.db.github.PySrvRepoPreparator;
@@ -54,7 +54,6 @@ import us.kbase.narrativemethodstore.util.TextUtils;
 import us.kbase.shock.client.BasicShockClient;
 import us.kbase.shock.client.ShockNodeId;
 
-// It'd be nice to know why this is ignored
 @Ignore
 public class MongoDynamicRepoDBTest {
     private static final String dbName = "test_repo_registry_mongo";
@@ -92,13 +91,13 @@ public class MongoDynamicRepoDBTest {
         String host = "localhost:" + dbHelper.getMongoPort();
         MongoDynamicRepoDB db = new MongoDynamicRepoDB(host, dbName, null, null, 
                 Arrays.asList(globalAdmin), false, shockUrl, shockToken);
-        Assert.assertEquals(0, db.listRepoModuleNames().size());
+        Assert.assertEquals(0, db.listRepoModuleNames(false, null).size());
         RepoProvider pvd = localFiles ? new FileRepoProvider(new File(localPath)) :
             new GitHubRepoProvider(new URL(gitUrl), null, dbHelper.getWorkDir());
         try {
             db.registerRepo(user1, pvd);
             Assert.assertEquals("[" + repoModuleName + "]", 
-                    db.listRepoModuleNames().toString(), null);
+                    db.listRepoModuleNames(false, null).toString(), null);
             Assert.assertTrue(db.isRepoOwner(repoModuleName, user1));
             Assert.assertEquals("[msneddon, " + user1 + "]", 
                     db.listRepoOwners(repoModuleName).toString());
@@ -117,7 +116,8 @@ public class MongoDynamicRepoDBTest {
             }
             db.setRepoState(user1, repoModuleName, RepoState.disabled);
             Assert.assertEquals(RepoState.disabled, db.getRepoState(repoModuleName));
-            Assert.assertEquals(0, db.listRepoModuleNames().size());
+            Assert.assertEquals(0, db.listRepoModuleNames(false, null).size());
+            Assert.assertEquals(1, db.listRepoModuleNames(true, null).size());
             // Register second version
             db.registerRepo(globalAdmin, pvd);
             long ver2 = db.getRepoLastVersion(repoModuleName, null);
@@ -151,7 +151,8 @@ public class MongoDynamicRepoDBTest {
             }
             db.setRepoState(globalAdmin, repoModuleName, RepoState.testing);
             db.setRepoState(globalAdmin, repoModuleName, RepoState.disabled);
-            Assert.assertEquals(0, db.listRepoModuleNames().size());
+            Assert.assertEquals(0, db.listRepoModuleNames(false, null).size());
+            Assert.assertEquals(1, db.listRepoModuleNames(true, null).size());
 
             Assert.assertFalse(db.isRepoRegistered(unregModuleName, true));
             try {
@@ -223,11 +224,11 @@ public class MongoDynamicRepoDBTest {
         String host = "localhost:" + dbHelper.getMongoPort();
         MongoDynamicRepoDB db = new MongoDynamicRepoDB(host, dbName, null, null, 
                 Arrays.asList(globalAdmin), false, shockUrl, shockToken);
-        Assert.assertEquals(0, db.listRepoModuleNames().size());
+        Assert.assertEquals(0, db.listRepoModuleNames(false, null).size());
         RepoProvider pvd = new FileRepoProvider(repoDir);
         db.registerRepo(userId, pvd);
         Assert.assertEquals("[" + moduleName + "]", 
-                db.listRepoModuleNames().toString());
+                db.listRepoModuleNames(false, null).toString());
         Assert.assertTrue(db.isRepoOwner(moduleName, userId));
         Assert.assertEquals("[" + userId + "]", 
                 db.listRepoOwners(moduleName).toString());
@@ -282,18 +283,19 @@ public class MongoDynamicRepoDBTest {
         return ocs.isDifferent();
     }
     
+    @SuppressWarnings({ "rawtypes", "unchecked" })
     @Before 
     @After
     public void cleanup() throws Exception {
         String host = "localhost:" + dbHelper.getMongoPort();
-        final MongoClient mc = new MongoClient(host);
-        final DB db = mc.getDB(dbName);
+        DB db = GetMongoDB.getDB(host, dbName, 0, 10);
         if (shockUrl != null) {
             try {
-                final DBCollection files = db.getCollection("repo_files");
-                final DBCursor it = files.find();
-                for (final DBObject dbo: it) {
-                    Map<String, Object> obj = toMap(dbo);
+                Jongo jdb = new Jongo(db);
+                MongoCollection files = jdb.getCollection("repo_files");
+                Iterator<Map> it = files.find("{}").as(Map.class).iterator();
+                while (it.hasNext()) {
+                    Map<String, Object> obj = it.next();
                     String fileName = (String)obj.get("file_name");
                     String shockNodeId = (String)obj.get("shock_node_id");
                     if (shockNodeId != null) {
@@ -307,6 +309,5 @@ public class MongoDynamicRepoDBTest {
             }
         }
         db.dropDatabase();
-        mc.close();
     }
 }
