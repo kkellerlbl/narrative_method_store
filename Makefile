@@ -19,21 +19,47 @@ TOP_DIR_NAME = $(shell basename $(TOP_DIR))
 DIR = $(shell pwd)
 
 ANT ?= ant
-TARGET ?= /kb/deployment
-SERVICE_DIR ?= $(TARGET)/services/$(SERVICE)
-
-# set ASADMIN to stub for now - may be able to delete it entirely
-ASADMIN ?= /usr/bin/true
 
 # make sure our make test works
 .PHONY : test
+
+ANT_OPTIONS =
 
 TESTCFG ?= test.cfg
 
 default: build-libs build-docs build-bin
 
 
-ANT_OPTIONS ?= -Djardir=submodules/jars/lib/jars
+ifeq ($(TOP_DIR_NAME), dev_container)
+
+##############################
+#### INSIDE DEV CONTAINER ####
+include $(TOP_DIR)/tools/Makefile.common
+include $(TOP_DIR)/tools/Makefile.common.rules
+
+DEPLOY_RUNTIME ?= /kb/runtime
+JAVA_HOME ?= $(DEPLOY_RUNTIME)/java
+TARGET ?= /kb/deployment
+SERVICE_DIR ?= $(TARGET)/services/$(SERVICE)
+GLASSFISH_HOME ?= $(DEPLOY_RUNTIME)/glassfish3
+SERVICE_USER ?= kbase
+
+ASADMIN = $(GLASSFISH_HOME)/glassfish/bin/asadmin
+
+SRC_PERL = $(wildcard scripts/*.pl)
+BIN_PERL = $(addprefix $(BIN_DIR)/,$(basename $(notdir $(SRC_PERL))))
+
+build-libs:
+	$(ANT) compile $(ANT_OPTIONS)
+
+build-bin: $(BIN_PERL)
+##############################
+
+else
+
+###############################
+#### OUTSIDE DEV CONTAINER ####
+ANT_OPTIONS = -Djardir=submodules/jars/lib/jars
 
 build-libs: submodule-init
 	$(ANT) compile $(ANT_OPTIONS)
@@ -41,6 +67,9 @@ build-libs: submodule-init
 build-bin: build-nms-bin
 
 deploy-cfg:
+###############################
+
+endif
 
 
 submodule-init:
@@ -103,13 +132,16 @@ test-service:
 	test/run_tests.sh
 
 test-scripts:
+	
+
+
 
 deploy: deploy-client deploy-service
 
 deploy-client: deploy-client-libs deploy-docs deploy-perl-scripts
 
 deploy-client-libs:
-	if [ -z "$(TARGET)" ]; \
+	if ["$(TARGET)" -eq ""]; \
 	  then \
 	  	 echo "Error makefile variable TARGET must be defined to deploy-client-libs"; \
 	  	 exit 1; \
@@ -121,7 +153,7 @@ deploy-client-libs:
 	echo $(TAGS) >> $(TARGET)/lib/$(SERVICE).clientdist
 
 deploy-docs:
-	@if [ -z "$(SERVICE_DIR)" ]; \
+	@if ["$(SERVICE_DIR)" -eq ""]; \
 	  then \
 	  	echo "Error makefile variable SERVICE_DIR must be defined to deploy-docs"; \
 	  	exit 1; \
@@ -132,7 +164,7 @@ deploy-docs:
 deploy-service: deploy-service-libs deploy-service-scripts deploy-cfg
 
 deploy-service-libs:
-	@if [ -z "$(SERVICE_DIR)" ]; \
+	@if ["$(SERVICE_DIR)" -eq ""]; \
 	  then \
 	  	echo "Error makefile variable SERVICE_DIR must be defined to deploy-service-libs"; \
 	  	exit 1; \
@@ -146,27 +178,28 @@ deploy-service-libs:
 	echo $(TAGS) >> $(SERVICE_DIR)/$(SERVICE).serverdist
 
 deploy-service-scripts:
-	@if [ -z "$(TARGET)" ]; \
+	@if ["$(TARGET)" -eq ""]; \
 	  then \
 	  	echo "Error makefile variable TARGET must be defined to deploy-service-scripts"; \
 	  	exit 1; \
 	fi;
-	@if [ -z "$(ASADMIN)" ]; \
+	@if ["$(ASADMIN)" -eq ""]; \
 	  then \
 	  	echo "Error makefile variable ASADMIN must be defined to deploy-service-scripts"; \
 	  	exit 1; \
 	fi;
+	cp server_scripts/glassfish_administer_service.py $(SERVICE_DIR)
 	cp server_scripts/jetty.xml $(SERVICE_DIR)
 	server_scripts/build_server_control_scripts.py $(SERVICE_DIR) $(WAR)\
 		$(TARGET) $(JAVA_HOME) deploy.cfg $(ASADMIN) $(SERVICE_CAPS)\
 		$(SERVICE_PORT)
 undeploy:
-	@if [ -z "$(SERVICE_DIR)" ]; \
+	@if ["$(SERVICE_DIR)" -eq ""]; \
 	  then \
 	  	echo "Error makefile variable SERVICE_DIR must be defined to undeploy"; \
 	  	exit 1; \
 	fi;
-	@if [ -z "$(TARGET)" ]; \
+	@if ["$(TARGET)" -eq ""]; \
 	  then \
 	  	echo "Error makefile variable TARGET must be defined to undeploy"; \
 	  	exit 1; \
